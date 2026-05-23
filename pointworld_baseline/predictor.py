@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Optional
 
@@ -16,6 +17,19 @@ from .schema import (
     require_shape,
     validate_horizon,
 )
+
+
+@contextmanager
+def _working_directory(path: Path):
+    """Run PointWorld code from its repo root for relative asset paths."""
+    import os
+
+    previous = Path.cwd()
+    os.chdir(path)
+    try:
+        yield
+    finally:
+        os.chdir(previous)
 
 
 class PointWorldPredictor:
@@ -81,20 +95,26 @@ class PointWorldPredictor:
         base = importlib.import_module("pointworld.base")
         contract = importlib.import_module("pointworld.checkpoint_contract")
 
-        checkpoint = torch.load(self.checkpoint, map_location=self.device)
+        checkpoint = torch.load(self.checkpoint, map_location=self.device, weights_only=False)
         model_contract, _ = contract.read_checkpoint_contract(checkpoint, context=f"checkpoint {self.checkpoint}")
         args = arguments.parse_args(skip_command_line=True)
         args.model_path = str(self.checkpoint)
-        args.device = self.device.type
+        args.device = str(self.device)
+        args.distributed = False
+        args.disable_compile = True
         args.domains = [self.domain]
         args.data_dirs = []
         contract.apply_model_contract_to_args(args, model_contract, context=f"checkpoint {self.checkpoint}")
+        norm_stats_path = Path(args.norm_stats_path)
+        if not norm_stats_path.is_absolute():
+            args.norm_stats_path = str(self.pointworld_repo / norm_stats_path)
 
         data_info_dict = {
             "robot_features_dim": 16,
             "scene_features_dim": 31,
         }
-        model = base.BaseModel(args, data_info_dict).to(self.device)
+        with _working_directory(self.pointworld_repo):
+            model = base.BaseModel(args, data_info_dict, rank=0, cpu_pg=None).to(self.device)
         state = checkpoint.get("model", checkpoint.get("state_dict", checkpoint))
         missing, unexpected = model.load_state_dict(state, strict=False)
         if missing:
@@ -119,20 +139,24 @@ class PointWorldPredictor:
         dataset_robot = importlib.import_module("dataset_components.robot")
         robot_sampler_mod = importlib.import_module("robot_sampler")
         utils = importlib.import_module("utils")
+        urdf_path = Path(utils.resolve_robot_urdf(self.domain))
+        if not urdf_path.is_absolute():
+            urdf_path = self.pointworld_repo / urdf_path
 
-        sampler = robot_sampler_mod.RobotSampler(
-            urdf_path=utils.resolve_robot_urdf(self.domain),
-            gripper_only=True,
-            device=self.robot_device,
-        )
-        sampler.presample(num_robot_points or self.num_robot_points, seed=self.robot_seed if seed is None else seed)
+        with _working_directory(self.pointworld_repo):
+            sampler = robot_sampler_mod.RobotSampler(
+                urdf_path=str(urdf_path),
+                gripper_only=True,
+                device=self.robot_device,
+            )
+            sampler.presample(num_robot_points or self.num_robot_points, seed=self.robot_seed if seed is None else seed)
 
-        qpos_t = torch.as_tensor(qpos, dtype=torch.float32, device=sampler.device)
-        gripper_t = torch.as_tensor(gripper_pos.reshape(-1), dtype=torch.float32, device=sampler.device)
-        joint_dict = {f"panda_joint{i + 1}": qpos_t[:, i] for i in range(7)}
-        joint_dict.update(dataset_robot.build_robotiq_joint_dict(gripper_t, sampler.joint_names))
-        with torch.no_grad():
-            points, colors, normals = sampler.compute_points(joint_dict)
+            qpos_t = torch.as_tensor(qpos, dtype=torch.float32, device=sampler.device)
+            gripper_t = torch.as_tensor(gripper_pos.reshape(-1), dtype=torch.float32, device=sampler.device)
+            joint_dict = {f"panda_joint{i + 1}": qpos_t[:, i] for i in range(7)}
+            joint_dict.update(dataset_robot.build_robotiq_joint_dict(gripper_t, sampler.joint_names))
+            with torch.no_grad():
+                points, colors, normals = sampler.compute_points(joint_dict)
         return (
             points.detach().cpu().numpy().astype(np.float32),
             colors.detach().cpu().numpy(),

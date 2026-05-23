@@ -35,19 +35,6 @@ out.object_points_pred[t, i] = predicted xyz of input object point i at timestep
 
 The model predicts a trajectory for every input point ID. Visibility/missing GT should be handled by your dataset masks and evaluation code.
 
-## Does PointWorld Use Language?
-
-No. The released PointWorld `large-droid` model is not language-conditioned.
-
-It is conditioned on:
-
-- current object/scene points
-- current RGB-D camera observation
-- camera intrinsics/extrinsics
-- future robot/gripper point trajectory
-
-This wrapper builds the robot point trajectory internally from robot state.
-
 ## Recommended High-Level API
 
 ```python

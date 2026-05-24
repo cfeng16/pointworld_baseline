@@ -52,7 +52,7 @@ out = predictor.predict_scene_motion(
     rgb=rgb,                        # (H, W, 3), uint8 RGB, current image
     depth=depth,                    # (H, W), float32 depth in meters
     intrinsics=intrinsics,          # (3, 3), camera intrinsics
-    extrinsics=extrinsics,          # (4, 4), camera extrinsics
+    extrinsics=extrinsics,          # (4, 4), world/base-to-camera extrinsics
     qpos=qpos,                      # (11, 7), robot arm joint trajectory
     gripper_pos=gripper_pos,        # (11,) or (11, 1), gripper open/close trajectory
     ofi_mask=ofi_mask,              # optional (N,), output-side object-of-interest mask
@@ -69,6 +69,8 @@ Important: `ofi_mask` is not conditioning. It does not hide points from PointWor
 ### `scene_points`, shape `(N, 3)`
 
 All clean scene points you want PointWorld to predict. Filter invalid/padded/depth-bad points before calling the API.
+
+Use the same world/robot-base frame as the robot trajectory. For Step3/DROID-style data this is the robot base frame, not the camera frame.
 
 ### `ofi_mask`, optional shape `(N,)`
 
@@ -100,7 +102,14 @@ fx  0 cx
 
 ### `extrinsics`, shape `(4, 4)`
 
-Camera extrinsic matrix. Your scene points and robot points must use the coordinate convention expected by this transform.
+Camera extrinsic matrix mapping scene/robot points from world or robot-base coordinates into the RGB-D camera frame:
+
+```text
+point_cam = extrinsics @ [point_world_or_base, 1]
+pixel     = intrinsics @ point_cam
+```
+
+Do not pass already-camera-frame points with a non-identity extrinsic. If your points are already in camera coordinates, use identity extrinsics and keep the robot points in the same camera frame.
 
 ### `qpos`, shape `(11, 7)`
 
@@ -110,9 +119,23 @@ Future Franka/Panda arm joint trajectory:
 qpos[t] = panda_joint1 ... panda_joint7 at timestep t
 ```
 
+For Step3/DROID-style data, use observed `obs/qpos` over the prediction window. Do not substitute the action vector for `qpos`; the action can be a command/target and is not the robot joint state.
+
 ### `gripper_pos`, shape `(11,)` or `(11, 1)`
 
 Future gripper open/close state. This is not the 6D gripper pose. The spatial gripper pose is computed from `qpos` with FK.
+
+For Step3/DROID-style data, `obs/gripper_pos` is the scalar gripper state. The observed end-effector pose is redundant for this high-level path when `qpos` is available; PointWorld reconstructs the gripper pose with FK.
+
+## Coordinate Checks
+
+For a new dataset, verify these before trusting predictions:
+
+1. Project `scene_points` with `extrinsics` and `intrinsics`; they should land on the RGB-D image and projected camera `z` should match depth.
+2. Inverting `extrinsics` should not be the better projection if your points are in world/base coordinates.
+3. FK from `qpos` should produce an end-effector link near the dataset's observed end-effector pose, if that pose is available.
+
+On Step3, `episode_context/origin_is_robot_base=True`; `achieved_flows` are robot-base points, and `episode_context/extrinsics` equals per-step `obs/extrinsics`. The correct transform direction is base/world to camera.
 
 ## Robot Conditioning Internally
 

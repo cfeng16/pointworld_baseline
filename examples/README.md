@@ -11,11 +11,14 @@ intrinsics: (3, 3)
 extrinsics: (4, 4)       # world/base-to-camera
 qpos: (11, 7)
 gripper_pos: (11,)
-ofi_mask: optional (N,)   # output-side object-of-interest mask
 ```
 
-`ofi_mask` is not a model input mask. It is used only after prediction for
-metrics, visualization, or optimization.
+The predictor returns one trajectory for every input `scene_points` row. If an
+adapter has a separate evaluation mask, apply it outside the predictor:
+
+```python
+selected_pred = out.scene_points_pred[:, eval_mask]
+```
 
 For Step3/DROID-style adapters, `scene_points` should stay in robot-base
 coordinates and `extrinsics` should map robot-base/world coordinates into the

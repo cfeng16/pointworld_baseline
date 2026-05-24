@@ -173,7 +173,6 @@ class PointWorldPredictor:
         depth: np.ndarray,
         intrinsics: np.ndarray,
         extrinsics: np.ndarray,
-        ofi_mask: np.ndarray | None = None,
         scene_normals: np.ndarray | None = None,
         scene_colors: np.ndarray | None = None,
     ) -> PointWorldOutput:
@@ -187,15 +186,9 @@ class PointWorldPredictor:
             depth: Current depth image in meters, shape (H, W).
             intrinsics: Camera intrinsics, shape (3, 3).
             extrinsics: Camera extrinsics, shape (4, 4).
-            ofi_mask: Optional object-of-interest mask, shape (N,). This is
-                only attached to the output for selection/metrics; it is not
-                used as a model input mask.
         """
         scene_points = as_numpy(scene_points, dtype=np.float32, name="scene_points")
         require_shape(scene_points, (None, 3), "scene_points")
-        ofi_mask_arr = None
-        if ofi_mask is not None:
-            ofi_mask_arr = as_numpy(ofi_mask, dtype=bool, name="ofi_mask").reshape(scene_points.shape[0])
         qpos = as_numpy(qpos, dtype=np.float32, name="qpos")
         validate_horizon("qpos", qpos)
         gripper_pos = as_numpy(gripper_pos, dtype=np.float32, name="gripper_pos").reshape(POINTWORLD_HORIZON, 1)
@@ -214,7 +207,6 @@ class PointWorldPredictor:
         return self.predict(
             scene_points=scene_points,
             scene_features=scene_features,
-            ofi_mask=ofi_mask_arr,
             robot_points=robot_points,
             robot_features=robot_features,
             robot_exists=None,
@@ -247,7 +239,6 @@ class PointWorldPredictor:
             depth=depth,
             intrinsics=intrinsics,
             extrinsics=extrinsics,
-            ofi_mask=object_exists,
             scene_normals=object_normals,
             scene_colors=object_colors,
         )
@@ -258,7 +249,6 @@ class PointWorldPredictor:
         scene_points: np.ndarray | None = None,
         scene_features: np.ndarray | None = None,
         scene_exists: np.ndarray | None = None,
-        ofi_mask: np.ndarray | None = None,
         robot_points: np.ndarray,
         robot_features: np.ndarray,
         robot_exists: np.ndarray | None = None,
@@ -287,9 +277,6 @@ class PointWorldPredictor:
         n_points = scene_points.shape[0]
         scene_features = as_numpy(scene_features, dtype=np.float32, name="scene_features")
         require_shape(scene_features, (POINTWORLD_HORIZON, n_points, 31), "scene_features")
-        ofi_mask_arr = None
-        if ofi_mask is not None:
-            ofi_mask_arr = as_numpy(ofi_mask, dtype=bool, name="ofi_mask").reshape(n_points)
         robot_points = as_numpy(robot_points, dtype=np.float32, name="robot_points")
         require_shape(robot_points, (POINTWORLD_HORIZON, None, 3), "robot_points")
         robot_features = as_numpy(robot_features, dtype=np.float32, name="robot_features")
@@ -353,5 +340,4 @@ class PointWorldPredictor:
             log_var=outputs.get("log_var", None)[0] if "log_var" in outputs else None,
             confidence=outputs.get("confidence", None)[0] if "confidence" in outputs else None,
             raw_outputs=outputs,
-            ofi_mask=ofi_mask_arr,
         )

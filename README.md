@@ -9,8 +9,6 @@ Input:  all clean scene points + RGB-D/camera + planned robot trajectory
 Output: predicted future 3D trajectory for every input scene point
 ```
 
-If you care about one object, pass an `ofi_mask` over those same input points. The `ofi_mask` is applied only to the output for metrics/visualization; it is not used as a model input mask.
-
 ## What PointWorld Predicts
 
 The released PointWorld model uses a fixed horizon:
@@ -33,7 +31,7 @@ Meaning:
 out.scene_points_pred[t, i] = predicted xyz of input scene point i at timestep t
 ```
 
-The model predicts every input point ID. Object-of-interest selection happens afterward with `ofi_mask`.
+The model predicts every input point ID, preserving the input `scene_points` ordering.
 
 ## Recommended API
 
@@ -55,14 +53,16 @@ out = predictor.predict_scene_motion(
     extrinsics=extrinsics,          # (4, 4), world/base-to-camera extrinsics
     qpos=qpos,                      # (11, 7), robot arm joint trajectory
     gripper_pos=gripper_pos,        # (11,) or (11, 1), gripper open/close trajectory
-    ofi_mask=ofi_mask,              # optional (N,), output-side object-of-interest mask
 )
 
 scene_pred = out.scene_points_pred  # (11, N, 3), all scene points
-ofi_pred = out.ofi_points_pred      # (11, M, 3), only if ofi_mask was provided
 ```
 
-Important: `ofi_mask` is not conditioning. It does not hide points from PointWorld. It only slices the prediction output.
+If you have a separate evaluation or segmentation mask, apply it outside the predictor:
+
+```python
+selected_pred = out.scene_points_pred[:, eval_mask]
+```
 
 ## Input Meaning
 
@@ -72,15 +72,9 @@ All clean scene points you want PointWorld to predict. Filter invalid/padded/dep
 
 Use the same world/robot-base frame as the robot trajectory. For Step3/DROID-style data this is the robot base frame, not the camera frame.
 
-### `ofi_mask`, optional shape `(N,)`
+### External Evaluation Masks
 
-Object-of-interest mask over `scene_points`. This is output-side only:
-
-```python
-out.ofi_points_pred == out.scene_points_pred[:, ofi_mask]
-```
-
-Use this for object metrics, visualization, or downstream optimization.
+The baseline API does not take an object-of-interest mask. PointWorld predicts all input scene points. If a dataset provides a real object or evaluation mask, keep it outside the predictor and slice the returned arrays yourself.
 
 ### `rgb`, shape `(H, W, 3)`
 
@@ -169,7 +163,6 @@ out = predictor.predict(
     depth=depth,
     intrinsics=intrinsics,
     extrinsics=extrinsics,
-    ofi_mask=ofi_mask,
 )
 ```
 
@@ -179,9 +172,7 @@ out = predictor.predict(
 | Output field | Shape | Meaning |
 | --- | --- | --- |
 | `scene_points_pred` | `(11, N, 3)` | Absolute predicted xyz trajectory for every input scene point. |
-| `ofi_points_pred` | `(11, M, 3)` or `None` | `scene_points_pred[:, ofi_mask]`; output-side object selection. |
 | `scene_displacement_pred` | `(11, N, 3)` | Predicted displacement relative to input point positions. |
-| `ofi_displacement_pred` | `(11, M, 3)` or `None` | `scene_displacement_pred[:, ofi_mask]`. |
 | `log_var` | `(11, N, 1)` | Predicted aleatoric uncertainty. |
 | `confidence` | `(11, N)` | Confidence derived from uncertainty. |
 | `raw_outputs` | dict | Raw PointWorld tensor outputs converted to numpy. |
@@ -212,7 +203,6 @@ Step3 support should live under `examples/`. A Step3 adapter should pass:
 
 ```text
 scene_points = all clean/valid tracked scene points at t=0
-ofi_mask = object-of-interest mask over those scene_points
 ```
 
-The core package should not depend on Step3.
+Do not treat Step3 `flow_moving_mask` as an object-of-interest mask. It is a moving-track mask and can include robot-associated tracks. The core package should not depend on Step3.

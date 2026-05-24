@@ -25,8 +25,6 @@ def main() -> None:
 
     n_points = 128
     scene_points = np.zeros((n_points, 3), dtype=np.float32)
-    ofi_mask = np.zeros((n_points,), dtype=bool)
-    ofi_mask[:16] = True
 
     rgb = np.zeros((224, 224, 3), dtype=np.uint8)
     depth = np.ones((224, 224), dtype=np.float32)
@@ -49,10 +47,8 @@ def main() -> None:
         extrinsics=extrinsics,
         qpos=qpos,
         gripper_pos=gripper_pos,
-        ofi_mask=ofi_mask,
     )
     print("scene prediction", out.scene_points_pred.shape)
-    print("ofi prediction", None if out.ofi_points_pred is None else out.ofi_points_pred.shape)
 
 
 if __name__ == "__main__":

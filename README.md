@@ -58,12 +58,6 @@ out = predictor.predict_scene_motion(
 scene_pred = out.scene_points_pred  # (11, N, 3), all scene points
 ```
 
-If you have a separate evaluation or segmentation mask, apply it outside the predictor:
-
-```python
-selected_pred = out.scene_points_pred[:, eval_mask]
-```
-
 ## Input Meaning
 
 ### `scene_points`, shape `(N, 3)`
@@ -71,10 +65,6 @@ selected_pred = out.scene_points_pred[:, eval_mask]
 All clean scene points you want PointWorld to predict. Filter invalid/padded/depth-bad points before calling the API.
 
 Use the same world/robot-base frame as the robot trajectory. For Step3/DROID-style data this is the robot base frame, not the camera frame.
-
-### External Evaluation Masks
-
-The baseline API does not take an object-of-interest mask. PointWorld predicts all input scene points. If a dataset provides a real object or evaluation mask, keep it outside the predictor and slice the returned arrays yourself.
 
 ### `rgb`, shape `(H, W, 3)`
 
@@ -166,7 +156,6 @@ out = predictor.predict(
 )
 ```
 
-
 ## Outputs
 
 | Output field | Shape | Meaning |
@@ -197,12 +186,3 @@ ln -s /share/fang/path/to/model-best.pt checkpoints/model-best.pt
 ln -s /share/fang/path/to/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth checkpoints/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth
 ```
 
-## Step3 Data
-
-Step3 support should live under `examples/`. A Step3 adapter should pass:
-
-```text
-scene_points = all clean/valid tracked scene points at t=0
-```
-
-Do not treat Step3 `flow_moving_mask` as an object-of-interest mask. It is a moving-track mask and can include robot-associated tracks. The core package should not depend on Step3.

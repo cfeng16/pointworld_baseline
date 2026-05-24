@@ -21,6 +21,8 @@ class PointWorldOutput:
         log_var: Aleatoric uncertainty log variance, shape (T, N, 1), if returned.
         confidence: Confidence derived from uncertainty, shape (T, N), if returned.
         raw_outputs: Raw PointWorld output dict, kept for debugging/experiments.
+        ofi_mask: Optional object-of-interest mask over input scene points. This
+            is output-side only; it is never used as a model input mask.
     """
 
     object_points_pred: np.ndarray
@@ -29,6 +31,7 @@ class PointWorldOutput:
     log_var: Optional[np.ndarray]
     confidence: Optional[np.ndarray]
     raw_outputs: dict[str, np.ndarray]
+    ofi_mask: Optional[np.ndarray] = None
 
     @property
     def scene_points_pred(self) -> np.ndarray:
@@ -41,6 +44,18 @@ class PointWorldOutput:
     @property
     def scene_displacement_pred_norm(self) -> Optional[np.ndarray]:
         return self.object_displacement_pred_norm
+
+    @property
+    def ofi_points_pred(self) -> Optional[np.ndarray]:
+        if self.ofi_mask is None:
+            return None
+        return self.scene_points_pred[:, self.ofi_mask]
+
+    @property
+    def ofi_displacement_pred(self) -> Optional[np.ndarray]:
+        if self.ofi_mask is None or self.scene_displacement_pred is None:
+            return None
+        return self.scene_displacement_pred[:, self.ofi_mask]
 
 
 def as_numpy(array, *, dtype=None, name: str = "array") -> np.ndarray:

@@ -35,8 +35,8 @@ def _working_directory(path: Path):
 class PointWorldPredictor:
     """Small inference API around the released NVIDIA PointWorld code.
 
-    The recommended high-level method is `predict_object_motion`, where callers
-    provide object points plus qpos/gripper_pos. The wrapper uses PointWorld's
+    The recommended high-level method is `predict_scene_motion`, where callers
+    provide scene points plus qpos/gripper_pos. The wrapper uses PointWorld's
     RobotSampler/FK internally to construct robot point conditioning.
     """
 
@@ -163,6 +163,63 @@ class PointWorldPredictor:
             normals.detach().cpu().numpy().astype(np.float32),
         )
 
+    def predict_scene_motion(
+        self,
+        *,
+        scene_points: np.ndarray,
+        qpos: np.ndarray,
+        gripper_pos: np.ndarray,
+        rgb: np.ndarray,
+        depth: np.ndarray,
+        intrinsics: np.ndarray,
+        extrinsics: np.ndarray,
+        scene_exists: np.ndarray | None = None,
+        scene_normals: np.ndarray | None = None,
+        scene_colors: np.ndarray | None = None,
+    ) -> PointWorldOutput:
+        """Predict the full PointWorld horizon for input scene points.
+
+        Args:
+            scene_points: Current scene points to forecast, shape (N, 3).
+            qpos: Franka/Panda arm joint trajectory, shape (T=11, 7).
+            gripper_pos: Gripper open/close state trajectory, shape (T=11,) or (T=11, 1).
+            rgb: Current RGB image, shape (H, W, 3), uint8 0..255.
+            depth: Current depth image in meters, shape (H, W).
+            intrinsics: Camera intrinsics, shape (3, 3).
+            extrinsics: Camera extrinsics, shape (4, 4).
+            scene_exists: Optional valid mask for scene_points, shape (N,).
+        """
+        scene_points = as_numpy(scene_points, dtype=np.float32, name="scene_points")
+        require_shape(scene_points, (None, 3), "scene_points")
+        qpos = as_numpy(qpos, dtype=np.float32, name="qpos")
+        validate_horizon("qpos", qpos)
+        gripper_pos = as_numpy(gripper_pos, dtype=np.float32, name="gripper_pos").reshape(POINTWORLD_HORIZON, 1)
+        robot_points, robot_colors, robot_normals = self.sample_robot_points_from_qpos(qpos, gripper_pos)
+        robot_features = make_robot_features(robot_points, gripper_pos, robot_normals, robot_colors)
+        scene_features = make_scene_features(
+            scene_points,
+            robot_points,
+            gripper_pos,
+            as_numpy(rgb, name="rgb"),
+            as_numpy(intrinsics, dtype=np.float32, name="intrinsics"),
+            as_numpy(extrinsics, dtype=np.float32, name="extrinsics"),
+            scene_normals=scene_normals,
+            scene_colors=scene_colors,
+            scene_exists=scene_exists,
+        )
+        return self.predict(
+            scene_points=scene_points,
+            scene_features=scene_features,
+            scene_exists=scene_exists,
+            robot_points=robot_points,
+            robot_features=robot_features,
+            robot_exists=None,
+            rgb=rgb,
+            depth=depth,
+            intrinsics=intrinsics,
+            extrinsics=extrinsics,
+        )
+
     def predict_object_motion(
         self,
         *,
@@ -177,78 +234,63 @@ class PointWorldPredictor:
         object_normals: np.ndarray | None = None,
         object_colors: np.ndarray | None = None,
     ) -> PointWorldOutput:
-        """Predict full PointWorld horizon for object points.
-
-        Args:
-            object_points: Current object points to forecast, shape (N, 3).
-            qpos: Franka/Panda arm joint trajectory, shape (T=11, 7).
-            gripper_pos: Gripper open/close state trajectory, shape (T=11,) or (T=11, 1).
-            rgb: Current RGB image, shape (H, W, 3), uint8 0..255.
-            depth: Current depth image in meters, shape (H, W).
-            intrinsics: Camera intrinsics, shape (3, 3).
-            extrinsics: Camera extrinsics, shape (4, 4).
-            object_exists: Optional valid mask for object_points, shape (N,).
-        """
-        object_points = as_numpy(object_points, dtype=np.float32, name="object_points")
-        require_shape(object_points, (None, 3), "object_points")
-        qpos = as_numpy(qpos, dtype=np.float32, name="qpos")
-        validate_horizon("qpos", qpos)
-        gripper_pos = as_numpy(gripper_pos, dtype=np.float32, name="gripper_pos").reshape(POINTWORLD_HORIZON, 1)
-        robot_points, robot_colors, robot_normals = self.sample_robot_points_from_qpos(qpos, gripper_pos)
-        robot_features = make_robot_features(robot_points, gripper_pos, robot_normals, robot_colors)
-        scene_features = make_scene_features(
-            object_points,
-            robot_points,
-            gripper_pos,
-            as_numpy(rgb, name="rgb"),
-            as_numpy(intrinsics, dtype=np.float32, name="intrinsics"),
-            as_numpy(extrinsics, dtype=np.float32, name="extrinsics"),
-            object_normals=object_normals,
-            object_colors=object_colors,
-            object_exists=object_exists,
-        )
-        return self.predict(
-            object_points=object_points,
-            object_features=scene_features,
-            object_exists=object_exists,
-            robot_points=robot_points,
-            robot_features=robot_features,
-            robot_exists=None,
+        """Compatibility alias for object-only scene-point prediction."""
+        return self.predict_scene_motion(
+            scene_points=object_points,
+            qpos=qpos,
+            gripper_pos=gripper_pos,
             rgb=rgb,
             depth=depth,
             intrinsics=intrinsics,
             extrinsics=extrinsics,
+            scene_exists=object_exists,
+            scene_normals=object_normals,
+            scene_colors=object_colors,
         )
 
     def predict(
         self,
         *,
-        object_points: np.ndarray,
-        object_features: np.ndarray,
-        object_exists: np.ndarray | None,
+        scene_points: np.ndarray | None = None,
+        scene_features: np.ndarray | None = None,
+        scene_exists: np.ndarray | None = None,
         robot_points: np.ndarray,
         robot_features: np.ndarray,
-        robot_exists: np.ndarray | None,
+        robot_exists: np.ndarray | None = None,
         rgb: np.ndarray,
         depth: np.ndarray,
         intrinsics: np.ndarray,
         extrinsics: np.ndarray,
+        object_points: np.ndarray | None = None,
+        object_features: np.ndarray | None = None,
+        object_exists: np.ndarray | None = None,
     ) -> PointWorldOutput:
         """Low-level API when robot point trajectory/features are already built."""
-        object_points = as_numpy(object_points, dtype=np.float32, name="object_points")
-        require_shape(object_points, (None, 3), "object_points")
-        n_points = object_points.shape[0]
-        object_features = as_numpy(object_features, dtype=np.float32, name="object_features")
-        require_shape(object_features, (POINTWORLD_HORIZON, n_points, 31), "object_features")
+        if scene_points is None:
+            scene_points = object_points
+        if scene_features is None:
+            scene_features = object_features
+        if scene_exists is None:
+            scene_exists = object_exists
+        if scene_points is None:
+            raise ValueError("scene_points is required")
+        if scene_features is None:
+            raise ValueError("scene_features is required")
+
+        scene_points = as_numpy(scene_points, dtype=np.float32, name="scene_points")
+        require_shape(scene_points, (None, 3), "scene_points")
+        n_points = scene_points.shape[0]
+        scene_features = as_numpy(scene_features, dtype=np.float32, name="scene_features")
+        require_shape(scene_features, (POINTWORLD_HORIZON, n_points, 31), "scene_features")
         robot_points = as_numpy(robot_points, dtype=np.float32, name="robot_points")
         require_shape(robot_points, (POINTWORLD_HORIZON, None, 3), "robot_points")
         robot_features = as_numpy(robot_features, dtype=np.float32, name="robot_features")
         require_shape(robot_features, (POINTWORLD_HORIZON, robot_points.shape[1], 16), "robot_features")
-        if object_exists is None:
-            object_exists_arr = np.ones((POINTWORLD_HORIZON, n_points), dtype=bool)
+        if scene_exists is None:
+            scene_exists_arr = np.ones((POINTWORLD_HORIZON, n_points), dtype=bool)
         else:
-            object_exists_1d = as_numpy(object_exists, dtype=bool, name="object_exists").reshape(n_points)
-            object_exists_arr = np.repeat(object_exists_1d.reshape(1, n_points), POINTWORLD_HORIZON, axis=0)
+            scene_exists_1d = as_numpy(scene_exists, dtype=bool, name="scene_exists").reshape(n_points)
+            scene_exists_arr = np.repeat(scene_exists_1d.reshape(1, n_points), POINTWORLD_HORIZON, axis=0)
         if robot_exists is None:
             robot_exists_arr = np.ones((POINTWORLD_HORIZON, robot_points.shape[1]), dtype=bool)
         else:
@@ -264,7 +306,7 @@ class PointWorldPredictor:
         require_shape(intr_arr, (3, 3), "intrinsics")
         require_shape(ext_arr, (4, 4), "extrinsics")
 
-        scene_flows = np.repeat(object_points.reshape(1, n_points, 3), POINTWORLD_HORIZON, axis=0)
+        scene_flows = np.repeat(scene_points.reshape(1, n_points, 3), POINTWORLD_HORIZON, axis=0)
 
         def tensor(array: np.ndarray, dtype: torch.dtype | None = None) -> torch.Tensor:
             out = torch.from_numpy(np.ascontiguousarray(array).copy())
@@ -274,8 +316,8 @@ class PointWorldPredictor:
 
         batch: dict[str, Any] = {
             "scene_flows": tensor(scene_flows, torch.float32),
-            "scene_features": tensor(object_features, torch.float32),
-            "scene_exists": tensor(object_exists_arr, torch.bool),
+            "scene_features": tensor(scene_features, torch.float32),
+            "scene_exists": tensor(scene_exists_arr, torch.bool),
             "robot_flows": tensor(robot_points, torch.float32),
             "robot_features": tensor(robot_features, torch.float32),
             "robot_exists": tensor(robot_exists_arr, torch.bool),

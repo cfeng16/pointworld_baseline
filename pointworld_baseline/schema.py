@@ -15,8 +15,8 @@ class PointWorldOutput:
     """PointWorld prediction output for one sample.
 
     Attributes:
-        object_points_pred: Absolute predicted object/scene point trajectory, shape (T, N, 3).
-        object_displacement_pred: Predicted displacement relative to input object points, shape (T, N, 3).
+        object_points_pred: Absolute predicted scene/object point trajectory, shape (T, N, 3).
+        object_displacement_pred: Predicted displacement relative to input point positions, shape (T, N, 3).
         object_displacement_pred_norm: Normalized displacement, shape (T, N, 3), if returned.
         log_var: Aleatoric uncertainty log variance, shape (T, N, 1), if returned.
         confidence: Confidence derived from uncertainty, shape (T, N), if returned.
@@ -29,6 +29,18 @@ class PointWorldOutput:
     log_var: Optional[np.ndarray]
     confidence: Optional[np.ndarray]
     raw_outputs: dict[str, np.ndarray]
+
+    @property
+    def scene_points_pred(self) -> np.ndarray:
+        return self.object_points_pred
+
+    @property
+    def scene_displacement_pred(self) -> Optional[np.ndarray]:
+        return self.object_displacement_pred
+
+    @property
+    def scene_displacement_pred_norm(self) -> Optional[np.ndarray]:
+        return self.object_displacement_pred_norm
 
 
 def as_numpy(array, *, dtype=None, name: str = "array") -> np.ndarray:

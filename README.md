@@ -5,11 +5,11 @@ This repository is a thin, dataset-agnostic inference wrapper around NVIDIA Poin
 The baseline task is:
 
 ```text
-Given current object points, current RGB-D observation, camera calibration,
-and a planned robot state trajectory, predict a future 3D trajectory for every input object point.
+Given current scene points, current RGB-D observation, camera calibration,
+and a planned robot state trajectory, predict a future 3D trajectory for every input scene point.
 ```
 
-PointWorld itself calls these `scene` points. This wrapper exposes them as `object_points` because the common robotics use case is object motion prediction.
+PointWorld predicts scene flow. For a proper scene-flow baseline, pass all useful non-robot scene points as `scene_points` and use a separate object/target mask only for evaluation or visualization. For an object-only ablation, you can pass only object points.
 
 ## What PointWorld Predicts
 
@@ -21,19 +21,19 @@ prediction horizon: 10
 total T:            11
 ```
 
-For `N` input object points, the main output is:
+For `N` input scene points, the main output is:
 
 ```python
-out.object_points_pred.shape == (11, N, 3)
+out.scene_points_pred.shape == (11, N, 3)
 ```
 
 Meaning:
 
 ```text
-out.object_points_pred[t, i] = predicted xyz of input object point i at timestep t
+out.scene_points_pred[t, i] = predicted xyz of input scene point i at timestep t
 ```
 
-The model predicts a trajectory for every input point ID. Visibility/missing GT should be handled by your dataset masks and evaluation code.
+The model predicts a trajectory for every input point ID. Visibility, moving-object masks, and object-of-interest masks should be handled by your dataset adapter and evaluation code.
 
 ## Recommended High-Level API
 
@@ -47,28 +47,51 @@ predictor = PointWorldPredictor(
     device="cuda",
 )
 
-out = predictor.predict_object_motion(
-    object_points=object_points,    # (N, 3), xyz points to forecast
+out = predictor.predict_scene_motion(
+    scene_points=scene_points,      # (N, 3), xyz scene points to forecast
+    scene_exists=scene_exists,      # optional (N,), bool valid mask for model input
     rgb=rgb,                        # (H, W, 3), uint8 RGB, current image
     depth=depth,                    # (H, W), float32 depth in meters
     intrinsics=intrinsics,          # (3, 3), camera intrinsics
     extrinsics=extrinsics,          # (4, 4), camera extrinsics
     qpos=qpos,                      # (11, 7), robot arm joint trajectory
     gripper_pos=gripper_pos,        # (11,) or (11, 1), gripper open/close trajectory
-    object_exists=object_exists,    # optional (N,), bool mask
 )
 
-pred = out.object_points_pred       # (11, N, 3)
+pred = out.scene_points_pred       # (11, N, 3)
 conf = out.confidence               # (11, N), if returned
+```
+
+`predict_object_motion(...)` is kept as a compatibility alias for object-only experiments. New code should call `predict_scene_motion(...)`.
+
+## Scene Points And Target Masks
+
+Use two different masks in your adapter:
+
+```text
+scene_exists: valid scene points that PointWorld should see and predict
+target_mask: object-of-interest points for metrics, visualization, or downstream optimization
+```
+
+`target_mask` is not passed to the predictor. PointWorld predicts all input points; your evaluation code selects the object points afterward.
+
+Recommended default for our Step3-style evaluation:
+
+```text
+scene_points = all valid tracked non-robot scene points at t=0
+scene_exists = scene_valid[0]
+target_mask = flow_moving_mask & scene_valid
 ```
 
 ## Input Meaning
 
-### `object_points`, shape `(N, 3)`
+### `scene_points`, shape `(N, 3)`
 
-The 3D points whose future motion you want to predict.
+The 3D scene points whose future motion you want to predict. Use all useful scene points for the main baseline. Use only object points for an object-only ablation.
 
-Use object points for an object-motion baseline. You can pass full-scene points, but PointWorld will then forecast every static/background point too.
+### `scene_exists`, optional shape `(N,)`
+
+Boolean valid mask for `scene_points`. If omitted, all input scene points are treated as valid.
 
 ### `rgb`, shape `(H, W, 3)`
 
@@ -102,7 +125,7 @@ fx  0 cx
 
 ### `extrinsics`, shape `(4, 4)`
 
-Camera extrinsic matrix. Your object points and robot points must use the coordinate convention expected by this transform.
+Camera extrinsic matrix. Your scene points and robot points must use the coordinate convention expected by this transform.
 
 ### `qpos`, shape `(11, 7)`
 
@@ -117,10 +140,6 @@ qpos[t] = panda_joint1 ... panda_joint7 at timestep t
 Future gripper open/close state.
 
 This is not the 6D gripper pose. The spatial gripper pose is computed from `qpos` with FK. `gripper_pos` controls finger opening.
-
-### `object_exists`, optional shape `(N,)`
-
-Boolean valid mask for object points. If omitted, all input object points are treated as valid.
 
 ## Robot Conditioning Internally
 
@@ -154,9 +173,9 @@ If you already have robot point trajectories, use:
 
 ```python
 out = predictor.predict(
-    object_points=object_points,
-    object_features=object_features,
-    object_exists=object_exists,
+    scene_points=scene_points,
+    scene_features=scene_features,
+    scene_exists=scene_exists,
     robot_points=robot_points,
     robot_features=robot_features,
     robot_exists=robot_exists,
@@ -171,9 +190,9 @@ Expected low-level shapes:
 
 | Input | Shape | Description |
 | --- | --- | --- |
-| `object_points` | `(N, 3)` | Current object points to forecast. |
-| `object_features` | `(11, N, 31)` | PointWorld scene feature tensor. |
-| `object_exists` | `(N,)` | Optional valid mask. |
+| `scene_points` | `(N, 3)` | Current scene points to forecast. |
+| `scene_features` | `(11, N, 31)` | PointWorld scene feature tensor. |
+| `scene_exists` | `(N,)` | Optional valid mask for model input. |
 | `robot_points` | `(11, Nr, 3)` | Robot/gripper point trajectory. |
 | `robot_features` | `(11, Nr, 16)` | Robot point features. |
 | `robot_exists` | `(11, Nr)` | Optional robot valid mask. |
@@ -186,8 +205,11 @@ Expected low-level shapes:
 
 | Output field | Shape | Meaning |
 | --- | --- | --- |
-| `object_points_pred` | `(11, N, 3)` | Absolute predicted xyz trajectory for each input object point. |
-| `object_displacement_pred` | `(11, N, 3)` | Predicted displacement relative to input object point positions. |
+| `scene_points_pred` | `(11, N, 3)` | Alias for `object_points_pred`; absolute predicted xyz trajectory for each input point. |
+| `object_points_pred` | `(11, N, 3)` | Backward-compatible name for the same prediction. |
+| `scene_displacement_pred` | `(11, N, 3)` | Alias for `object_displacement_pred`. |
+| `object_displacement_pred` | `(11, N, 3)` | Predicted displacement relative to input point positions. |
+| `scene_displacement_pred_norm` | `(11, N, 3)` | Alias for `object_displacement_pred_norm`. |
 | `object_displacement_pred_norm` | `(11, N, 3)` | Normalized displacement from PointWorld. |
 | `log_var` | `(11, N, 1)` | Predicted aleatoric uncertainty. |
 | `confidence` | `(11, N)` | Confidence derived from uncertainty. |
@@ -216,7 +238,7 @@ ln -s /share/fang/path/to/dinov3_vitl16_pretrain_lvd1689m-8aa4cbdd.pth checkpoin
 Step3 support should live under `examples/`. It is an adapter that produces the generic API inputs:
 
 ```text
-object_points, rgb, depth, intrinsics, extrinsics, qpos, gripper_pos, object_exists
+scene_points, scene_exists, rgb, depth, intrinsics, extrinsics, qpos, gripper_pos
 ```
 
-The core package should not depend on Step3.
+Object/moving-point masks should remain adapter-side evaluation or visualization masks, not core model inputs. The core package should not depend on Step3.

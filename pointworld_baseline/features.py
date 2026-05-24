@@ -63,12 +63,15 @@ def sample_rgb_at_points(
 
 
 def make_scene_features(
-    object_points: np.ndarray,
+    scene_points: np.ndarray,
     robot_points: np.ndarray,
     gripper_pos: np.ndarray,
     rgb: np.ndarray,
     intrinsics: np.ndarray,
     extrinsics: np.ndarray,
+    scene_normals: np.ndarray | None = None,
+    scene_colors: np.ndarray | None = None,
+    scene_exists: np.ndarray | None = None,
     object_normals: np.ndarray | None = None,
     object_colors: np.ndarray | None = None,
     object_exists: np.ndarray | None = None,
@@ -76,25 +79,33 @@ def make_scene_features(
     """Build the released PointWorld 31-D scene feature tensor.
 
     Returns shape (T, N, 31). Only t=0 is consumed by the released model, but
-    PointWorld's batch schema is time-major.
+    PointWorld's batch schema is time-major. The object_* arguments are kept as
+    compatibility aliases for older object-only callers.
     """
-    object_points = np.asarray(object_points, dtype=np.float32)
+    if scene_normals is None:
+        scene_normals = object_normals
+    if scene_colors is None:
+        scene_colors = object_colors
+    if scene_exists is None:
+        scene_exists = object_exists
+
+    scene_points = np.asarray(scene_points, dtype=np.float32)
     robot_points = np.asarray(robot_points, dtype=np.float32)
     gripper_pos = np.asarray(gripper_pos, dtype=np.float32).reshape(POINTWORLD_HORIZON, -1)
     if gripper_pos.shape[1] != 1:
         raise ValueError(f"gripper_pos must be scalar per step, got shape {gripper_pos.shape}")
-    n_points = object_points.shape[0]
-    if object_normals is None:
-        object_normals = np.zeros((n_points, 3), dtype=np.float32)
-    if object_colors is None:
-        object_colors = sample_rgb_at_points(rgb, object_points, intrinsics, extrinsics, object_exists)
+    n_points = scene_points.shape[0]
+    if scene_normals is None:
+        scene_normals = np.zeros((n_points, 3), dtype=np.float32)
+    if scene_colors is None:
+        scene_colors = sample_rgb_at_points(rgb, scene_points, intrinsics, extrinsics, scene_exists)
     gripper_context = np.repeat(gripper_pos.reshape(1, 1, POINTWORLD_HORIZON), n_points, axis=1)
-    dist2robot = pairwise_min_dist(object_points, robot_points).T.reshape(1, n_points, POINTWORLD_HORIZON)
+    dist2robot = pairwise_min_dist(scene_points, robot_points).T.reshape(1, n_points, POINTWORLD_HORIZON)
     feat0 = np.concatenate(
         [
-            object_points.reshape(1, n_points, 3),
-            np.asarray(object_colors, dtype=np.float32).reshape(1, n_points, 3),
-            np.asarray(object_normals, dtype=np.float32).reshape(1, n_points, 3),
+            scene_points.reshape(1, n_points, 3),
+            np.asarray(scene_colors, dtype=np.float32).reshape(1, n_points, 3),
+            np.asarray(scene_normals, dtype=np.float32).reshape(1, n_points, 3),
             gripper_context,
             dist2robot,
         ],

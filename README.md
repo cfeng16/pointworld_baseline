@@ -72,7 +72,7 @@ Current RGB image at the beginning of the prediction window. Expected format: ui
 
 ### `depth`, shape `(H, W)`
 
-Current depth image at the beginning of the prediction window. Expected format: float32 depth in meters.
+Current depth image at the beginning of the prediction window. Expected format: float32 depth in meters. If `scene_normals` is not provided, the wrapper estimates scene normals from this depth image and transforms them into the same frame as `scene_points`.
 
 ### `intrinsics`, shape `(3, 3)`
 

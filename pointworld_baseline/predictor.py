@@ -199,6 +199,7 @@ class PointWorldPredictor:
             robot_points,
             gripper_pos,
             as_numpy(rgb, name="rgb"),
+            as_numpy(depth, dtype=np.float32, name="depth"),
             as_numpy(intrinsics, dtype=np.float32, name="intrinsics"),
             as_numpy(extrinsics, dtype=np.float32, name="extrinsics"),
             scene_normals=scene_normals,

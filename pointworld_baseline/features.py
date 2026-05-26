@@ -62,11 +62,97 @@ def sample_rgb_at_points(
     return colors
 
 
+def _normalize_vectors(values: np.ndarray, eps: float = 1e-8) -> np.ndarray:
+    values = np.asarray(values, dtype=np.float32)
+    norms = np.linalg.norm(values, axis=-1, keepdims=True)
+    return np.divide(values, norms, out=np.zeros_like(values, dtype=np.float32), where=norms > eps)
+
+
+def estimate_camera_normal_map_from_depth(depth: np.ndarray, intrinsics: np.ndarray) -> np.ndarray:
+    """Estimate per-pixel camera-frame normals from a metric depth image."""
+    depth = np.asarray(depth, dtype=np.float32)
+    intrinsics = np.asarray(intrinsics, dtype=np.float32)
+    if depth.ndim != 2:
+        raise ValueError(f"depth must have shape (H, W), got {depth.shape}")
+    h, w = depth.shape
+    fx = float(intrinsics[0, 0])
+    fy = float(intrinsics[1, 1])
+    cx = float(intrinsics[0, 2])
+    cy = float(intrinsics[1, 2])
+    if abs(fx) < 1e-8 or abs(fy) < 1e-8:
+        raise ValueError("intrinsics must have nonzero fx and fy")
+
+    yy, xx = np.indices((h, w), dtype=np.float32)
+    z = depth
+    points = np.stack(
+        [
+            (xx - cx) * z / fx,
+            (yy - cy) * z / fy,
+            z,
+        ],
+        axis=-1,
+    ).astype(np.float32)
+
+    depth_valid = np.isfinite(z) & (z > 1e-6)
+    normal_map = np.zeros((h, w, 3), dtype=np.float32)
+    if h < 3 or w < 3:
+        return normal_map
+
+    dx = points[1:-1, 2:, :] - points[1:-1, :-2, :]
+    dy = points[2:, 1:-1, :] - points[:-2, 1:-1, :]
+    normals = np.cross(dx, dy)
+    valid = (
+        depth_valid[1:-1, 1:-1]
+        & depth_valid[1:-1, 2:]
+        & depth_valid[1:-1, :-2]
+        & depth_valid[2:, 1:-1]
+        & depth_valid[:-2, 1:-1]
+    )
+    normals = _normalize_vectors(normals)
+    normal_map[1:-1, 1:-1] = np.where(valid[..., None], normals, 0.0)
+    return normal_map
+
+
+def estimate_scene_normals_from_depth(
+    scene_points: np.ndarray,
+    depth: np.ndarray,
+    intrinsics: np.ndarray,
+    extrinsics: np.ndarray,
+    valid_mask: np.ndarray | None = None,
+) -> np.ndarray:
+    """Sample depth-derived normals for world/base-frame scene points.
+
+    The returned normals are in the same world/base frame as scene_points.
+    """
+    scene_points = np.asarray(scene_points, dtype=np.float32)
+    intrinsics = np.asarray(intrinsics, dtype=np.float32)
+    extrinsics = np.asarray(extrinsics, dtype=np.float32)
+    normal_map_cam = estimate_camera_normal_map_from_depth(depth, intrinsics)
+    h, w = normal_map_cam.shape[:2]
+
+    xy, z_valid = project_world_to_pixel(scene_points, intrinsics, extrinsics)
+    x = np.rint(xy[:, 0]).astype(np.int64)
+    y = np.rint(xy[:, 1]).astype(np.int64)
+    mask = (x >= 0) & (x < w) & (y >= 0) & (y < h) & z_valid
+    if valid_mask is not None:
+        mask &= np.asarray(valid_mask, dtype=bool)
+
+    normals_cam = np.zeros((scene_points.shape[0], 3), dtype=np.float32)
+    normals_cam[mask] = normal_map_cam[y[mask], x[mask]]
+    normals_cam = _normalize_vectors(normals_cam)
+
+    # extrinsics maps world/base -> camera. For row-vector arrays, camera -> world is n_cam @ R.
+    rotation_world_to_cam = extrinsics[:3, :3]
+    normals_world = normals_cam @ rotation_world_to_cam
+    return _normalize_vectors(normals_world)
+
+
 def make_scene_features(
     scene_points: np.ndarray,
     robot_points: np.ndarray,
     gripper_pos: np.ndarray,
     rgb: np.ndarray,
+    depth: np.ndarray,
     intrinsics: np.ndarray,
     extrinsics: np.ndarray,
     scene_normals: np.ndarray | None = None,
@@ -96,7 +182,9 @@ def make_scene_features(
         raise ValueError(f"gripper_pos must be scalar per step, got shape {gripper_pos.shape}")
     n_points = scene_points.shape[0]
     if scene_normals is None:
-        scene_normals = np.zeros((n_points, 3), dtype=np.float32)
+        scene_normals = estimate_scene_normals_from_depth(
+            scene_points, depth, intrinsics, extrinsics, scene_exists
+        )
     if scene_colors is None:
         scene_colors = sample_rgb_at_points(rgb, scene_points, intrinsics, extrinsics, scene_exists)
     gripper_context = np.repeat(gripper_pos.reshape(1, 1, POINTWORLD_HORIZON), n_points, axis=1)
